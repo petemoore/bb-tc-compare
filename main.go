@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -91,19 +93,48 @@ func curl(url string, file string) {
 		log.Println("Warning: could not get URL " + url)
 		return
 	}
-	bytes, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Println("Warning: could not get URL " + url)
-		panic(err)
+	if res.StatusCode != 200 {
+		// log.Println("Warning: non 200 response code from URL " + url)
+		return
+	}
+	scanner := bufio.NewScanner(res.Body)
+	started := false
+	text := ""
+	for scanner.Scan() {
+		if !started && strings.Contains(scanner.Text(), "MultiFileLogger online at") {
+			started = true
+		}
+		if started {
+			text += tcBuildDir.ReplaceAllLiteralString(bbBuildDir.ReplaceAllLiteralString(time.ReplaceAllLiteralString(scanner.Text(), "XX:XX:XX"), "<BUILD-DIR>"), "<BUILD-DIR>") + "\n"
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Warning: problem reading from URL %s: %s", url, err)
+	}
+	if len(text) == 0 {
+		return
 	}
 	err = os.MkdirAll(path.Dir(file), 0755)
 	if err != nil {
 		panic(err)
 	}
-	err = ioutil.WriteFile(file, bytes, 0644)
+	err = ioutil.WriteFile(file, []byte(text), 0644)
 	if err != nil {
 		panic(err)
 	}
+	log.Println("Fetched " + url + " into " + file)
+}
+
+var (
+	time       *regexp.Regexp
+	bbBuildDir *regexp.Regexp
+	tcBuildDir *regexp.Regexp
+)
+
+func init() {
+	time = regexp.MustCompile(`^[0-2][0-9]:[0-5][0-9]:[0-5][0-9]`)
+	bbBuildDir = regexp.MustCompile(`[\\/]?[cC]:?[\\/]+builds[\\/]+moz2_slave[\\/]+try-w[0-9a-z\-]*`)
+	tcBuildDir = regexp.MustCompile(`[\\/]?[cC]:?[\\/]+Users[\\/]+Task_[0-9]*`)
 }
 
 func main() {
@@ -126,27 +157,27 @@ func main() {
 		readInto(jobsURL, jobsList)
 		for _, job := range jobsList.Results {
 			if (job.PlatformOption == "opt" || job.PlatformOption == "debug") && (bpmap[job.BuildPlatformId].Platform == "windowsxp" || bpmap[job.BuildPlatformId].Platform == "windows8-64") {
-				log.Printf("  Job: %s, %v", job.PlatformOption, bpmap[job.BuildPlatformId].Platform)
+				// log.Printf("  Job: %s, %v", job.PlatformOption, bpmap[job.BuildPlatformId].Platform)
 				jobData := new(JobData)
 				jobDataURL := fmt.Sprintf("https://treeherder.mozilla.org/api/project/try/jobs/%v/", job.Id)
 				readInto(jobDataURL, jobData)
 				for _, jd := range jobData.Artifacts {
 					if jd.Name == "Job Info" {
-						log.Printf("    %s", jd.ResourceURI)
+						// log.Printf("    %s", jd.ResourceURI)
 						resURL := "https://treeherder.mozilla.org" + jd.ResourceURI
-						dir := path.Join(rs.Revisions[0].Revision, job.PlatformOption, bpmap[job.BuildPlatformId].Platform)
+						dir := path.Join(args[1], rs.Revisions[0].Revision, job.PlatformOption, bpmap[job.BuildPlatformId].Platform)
 						switch jobData.BuildSystemType {
 						case "buildbot":
 							bbInfo := new(BBInfo)
 							readInto(resURL, bbInfo)
-							log.Println("      buildbot:" + bbInfo.Blob.LogURL)
+							// log.Println("      buildbot:" + bbInfo.Blob.LogURL)
 							curl(bbInfo.Blob.LogURL, path.Join(dir, "bb"))
 						case "taskcluster":
 							tcInfo := new(TCInfo)
 							readInto(resURL, tcInfo)
-							log.Println("      taskcluster:")
+							// log.Println("      taskcluster:")
 							for _, d := range tcInfo.Blob.JobDetails {
-								log.Println("        " + d.URL)
+								// log.Println("        " + d.URL)
 								logURL := strings.Replace(d.URL, "tools.taskcluster.net/task-inspector/#", "public-artifacts.taskcluster.net/", 1) + "/public/logs/all_commands.log"
 								curl(logURL, path.Join(dir, "tc"))
 							}
